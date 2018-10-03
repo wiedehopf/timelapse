@@ -44,6 +44,9 @@ var SitePosition = null;
 var ReceiverClock = null;
 
 var LastReceiverTimestamp = 0;
+var last = 0;
+var now = 0;
+var Refresh = null;
 var StaleReceiverCount = 0;
 var FetchPending = null;
 
@@ -159,12 +162,8 @@ function fetchData() {
 		if (!data)
 			location.reload();
 	
-                var now = data.now;
-		var last = (LastReceiverTimestamp == 0) ? now-1 : LastReceiverTimestamp;
-		var histInterval = now - last;
-		console.log(histInterval);
-
-		setTimeout(fetchData, (histInterval/playbackSpeed)*1000);
+                now = data.now;
+		last = (LastReceiverTimestamp == 0) ? now-1 : LastReceiverTimestamp;
 
                 processReceiverUpdate(data);
 
@@ -513,7 +512,7 @@ function end_load_history() {
         reaper();
 
         // Setup our timer to poll from the server.
-        //window.setInterval(fetchData, RefreshInterval);
+        Refresh = window.setInterval(fetchData, RefreshInterval);
         window.setInterval(reaper, 60000);
 
         // And kick off one refresh immediately.
@@ -1755,6 +1754,11 @@ function setAltitudeLegend(units) {
 function onPlaybackSpeed(e) {
     playbackSpeed = parseFloat($("#playback_speed").val().trim());
     e.preventDefault();
+    var histInterval = now - last;
+    if (playbackSpeed < 0.1) playbackSpeed = 1;
+    RefreshInterval = (histInterval/playbackSpeed)*1000;
+    window.clearInterval(Refresh);
+    Refresh = window.setInterval(fetchData, RefreshInterval);
 }
 
 function onFilterByAltitude(e) {
