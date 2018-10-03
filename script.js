@@ -156,6 +156,8 @@ function fetchData() {
 	
 
                 var data = PositionHistoryBuffer.pop();
+		if (!data)
+			location.reload();
 	
                 var now = data.now;
 		var last = (LastReceiverTimestamp == 0) ? now-1 : LastReceiverTimestamp;
