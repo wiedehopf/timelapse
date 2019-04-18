@@ -22,6 +22,9 @@ var PositionHistoryBuffer = [];
 var playbackSpeed = 10;
 var HistoryChunks = false;
 var chunksize = 20;
+var histInterval = 30;
+var fetchIteration = 0;
+var histJump = 0.1;
 
 var SpecialSquawks = {
         '7500' : { cssClass: 'squawk7500', markerColor: 'rgb(255, 85, 85)', text: 'Aircraft Hijacking' },
@@ -43,7 +46,6 @@ var TrackedHistorySize = 0;
 
 var SitePosition = null;
 
-var ReceiverClock = null;
 
 var LastReceiverTimestamp = 0;
 var last = 0;
@@ -146,64 +148,39 @@ function processReceiverUpdate(data) {
 }
 
 function fetchData() {
-        if (FetchPending !== null && FetchPending.state() == 'pending') {
-                // don't double up on fetches, let the last one resolve
-                return;
-        }
 	
+	if (fetchIteration++ % 10 == 0)
+		reaper();
+
+	var data;
+	for (var i=0; i<histJump; i++)
+		data = PositionHistoryBuffer.pop();
+
+	if (!data)
+		location.reload();
 
 
-	//FetchPending = $.ajax({ url: 'data/aircraft.json',
-        //                        timeout: 5000,
-        //                        cache: false,
-        //                        dataType: 'json' });
-        //FetchPending.done(function(data) {
-	
+	now = data.now;
+	$('#clock_div').text(new Date(now * 1000).toLocaleString());
 
-                var data = PositionHistoryBuffer.pop();
-		if (!data)
-			location.reload();
-	
-                now = data.now;
-		last = (LastReceiverTimestamp == 0) ? now-1 : LastReceiverTimestamp;
 
-                processReceiverUpdate(data);
+	last = (LastReceiverTimestamp == 0) ? now-1 : LastReceiverTimestamp;
 
-                // update timestamps, visibility, history track for all planes - not only those updated
-                for (var i = 0; i < PlanesOrdered.length; ++i) {
-                        var plane = PlanesOrdered[i];
-                        plane.updateTick(now, LastReceiverTimestamp);
-                }
-                
-		selectNewPlanes();
-		refreshTableInfo();
-		refreshSelected();
-		refreshHighlighted();
-                
-                if (ReceiverClock) {
-                        var rcv = new Date(now * 1000);
-                        ReceiverClock.render(rcv.getUTCHours(),rcv.getUTCMinutes(),rcv.getUTCSeconds());
-                }
+	processReceiverUpdate(data);
 
-                // Check for stale receiver data
-                if (LastReceiverTimestamp === now) {
-                        StaleReceiverCount++;
-                        if (StaleReceiverCount > 5) {
-                                $("#update_error_detail").text("The data from dump1090 hasn't been updated in a while. Maybe dump1090 is no longer running?");
-                                $("#update_error").css('display','block');
-                        }
-                } else { 
-                        StaleReceiverCount = 0;
-                        LastReceiverTimestamp = now;
-                        $("#update_error").css('display','none');
-                }
-	//}); (old end of jquery result function
-/*
-        FetchPending.fail(function(jqxhr, status, error) {
-                $("#update_error_detail").text("AJAX call failed (" + status + (error ? (": " + error) : "") + "). Maybe dump1090 is no longer running?");
-                $("#update_error").css('display','block');
-        });
-*/
+	// update timestamps, visibility, history track for all planes - not only those updated
+	for (var i = 0; i < PlanesOrdered.length; ++i) {
+		var plane = PlanesOrdered[i];
+		plane.updateTick(now, LastReceiverTimestamp);
+	}
+
+	selectNewPlanes();
+	refreshTableInfo();
+	refreshSelected();
+	refreshHighlighted();
+
+    window.clearTimeout(Refresh);
+    Refresh = window.setTimeout(fetchData, RefreshInterval);
 
 }
 
@@ -240,7 +217,6 @@ function initialize() {
 
         PlaneRowTemplate = document.getElementById("plane_row_template");
 
-        refreshClock();
 
         $.ajax({
                 url:'data/chunk_0.gz',
@@ -589,11 +565,12 @@ function end_load_history() {
         reaper();
 
         // Setup our timer to poll from the server.
-        Refresh = window.setInterval(fetchData, RefreshInterval);
-        window.setInterval(reaper, 60000);
-
+		var data = PositionHistoryBuffer.pop();
+		var data2 = PositionHistoryBuffer.pop();
+		histInterval = data2.now - data.now;
+		
         // And kick off one refresh immediately.
-	fetchData();
+		fetchData();
 
 }
 
@@ -1311,10 +1288,6 @@ function refreshHighlighted() {
 
 }
 
-function refreshClock() {
-	$('#clock_div').text(new Date(now * 1000).toLocaleString());
-	var c = setTimeout(refreshClock, 500);
-}
 
 function removeHighlight() {
 	HighlightedPlane = null;
@@ -1831,11 +1804,11 @@ function setAltitudeLegend(units) {
 function onPlaybackSpeed(e) {
     playbackSpeed = parseFloat($("#playback_speed").val().trim());
     e.preventDefault();
-    var histInterval = now - last;
-    if (playbackSpeed < 0.1) playbackSpeed = 1;
+    if (playbackSpeed < 0.1) playbackSpeed = 0.1;
     RefreshInterval = (histInterval/playbackSpeed)*1000;
-    window.clearInterval(Refresh);
-    Refresh = window.setInterval(fetchData, RefreshInterval);
+	histJump = (playbackSpeed/histInterval)/10;
+    window.clearTimeout(Refresh);
+    Refresh = window.setTimeout(fetchData, RefreshInterval);
 }
 
 function onFilterByAltitude(e) {
