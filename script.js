@@ -20,6 +20,8 @@ var pako = window.pako;
 var loadtime = "loadtime";
 var PositionHistoryBuffer = [];
 var playbackSpeed = 10;
+var HistoryChunks = false;
+var chunksize = 20;
 
 var SpecialSquawks = {
         '7500' : { cssClass: 'squawk7500', markerColor: 'rgb(255, 85, 85)', text: 'Aircraft Hijacking' },
@@ -205,6 +207,30 @@ function fetchData() {
 
 }
 
+function get_receiver() {
+	return $.ajax({ url: 'data/receiver.json',
+		 timeout: 5000,
+		 cache: false,
+		 dataType: 'json'
+	});
+}
+function test_chunk() {
+	return $.ajax({
+		url:'data/chunk_0.gz',
+		type:'HEAD',
+		timeout: 3000,
+                success: function()
+                {
+                    HistoryChunks = true;
+                },
+                statuscode: {
+                        304: function() {
+                                HistoryChunks = true;
+                        }
+                }
+	});
+}
+
 var PositionHistorySize = 0;
 function initialize() {
         // Set page basics
@@ -215,6 +241,16 @@ function initialize() {
         PlaneRowTemplate = document.getElementById("plane_row_template");
 
         refreshClock();
+
+        $.ajax({
+                url:'data/chunk_0.gz',
+                type:'HEAD',
+                timeout: 3000,
+                success: function()
+                {
+                    HistoryChunks = true;
+                }
+        });
 
         $("#loader").removeClass("hidden");
 
@@ -388,42 +424,45 @@ function initialize() {
 
         // Get receiver metadata, reconfigure using it, then continue
         // with initialization
-        $.ajax({ url: 'data/receiver.json',
-                 timeout: 5000,
-                 cache: false,
-                 dataType: 'json' })
+        $.when(get_receiver(), test_chunk()).done(function(receiver, chunk){
+                var data = receiver[0];
+                if (typeof data.lat !== "undefined") {
+                        SiteShow = true;
+                        SiteLat = data.lat;
+                        SiteLon = data.lon;
+                        DefaultCenterLat = data.lat;
+                        DefaultCenterLon = data.lon;
+                }
 
-                .done(function(data) {
-                        if (typeof data.lat !== "undefined") {
-                                SiteShow = true;
-                                SiteLat = data.lat;
-                                SiteLon = data.lon;
-                                DefaultCenterLat = data.lat;
-                                DefaultCenterLon = data.lon;
-                        }
-                        
-                        Dump1090Version = data.version;
-                        RefreshInterval = data.refresh;
-                        PositionHistorySize = data.history;
-                })
+                Dump1090Version = data.version;
+                RefreshInterval = data.refresh;
+                PositionHistorySize = data.history;
 
-                .always(function() {
-                        initialize_map();
-                        start_load_history();
-                });
+                initialize_map();
+                start_load_history();
+        });
 }
 
 var CurrentHistoryFetch = null;
 var HistoryItemsReturned = 0;
 function start_load_history() {
 	if (PositionHistorySize > 0 && window.location.hash != '#nohistory') {
-		console.log("Starting to load history (" + PositionHistorySize + " items)");
-		//Load history items in parallel
-		//PositionHistorySize = Math.ceil(PositionHistorySize/20);
-		$("#loader_progress").attr('max',PositionHistorySize);
-		console.time("Downloaded and parsed History");
-		for (var i = 0; i < PositionHistorySize; i++) {
-			load_history_item(i);
+		if (HistoryChunks) {
+			PositionHistorySize = Math.ceil(PositionHistorySize/chunksize);
+			$("#loader_progress").attr('max',PositionHistorySize);
+			console.log("Starting to load history (" + PositionHistorySize + " items)");
+			console.time("Downloaded and parsed History");
+			//Load history chunks in parallel
+			for (var i = 0; i < PositionHistorySize; i++) {
+				load_history_chunk(i);
+			}
+		} else {
+			$("#loader_progress").attr('max',PositionHistorySize);
+			console.log("Starting to load history (" + PositionHistorySize + " items)");
+			//Load history items in parallel
+			for (var i = 0; i < PositionHistorySize; i++) {
+				load_history_item(i);
+			}
 		}
 	}
 }
@@ -444,6 +483,44 @@ function load_history_item(i) {
 			HistoryItemsReturned++;
 			$("#loader_progress").attr('value',HistoryItemsReturned);
 			PositionHistoryBuffer.push(data);
+			if (HistoryItemsReturned == PositionHistorySize) {
+				end_load_history();
+			}
+                })
+
+                .fail(function(jqxhr, status, error) {
+					//Doesn't matter if it failed, we'll just be missing a data point
+					console.log(error);
+					HistoryItemsReturned++;
+					if (HistoryItemsReturned == PositionHistorySize) {
+						end_load_history();
+					}
+                });
+}
+
+function load_history_chunk(i) {
+        //console.log("Loading history #" + i);
+        //$("#loader_progress").attr('value',i);
+
+        $.ajax({ url: 'data/chunk_' + i + '.gz',
+                timeout: PositionHistorySize * 1000, // Allow 40 ms load time per history entry
+                //cache: false,
+	})
+
+                .done(function(data) {
+			HistoryItemsReturned++;
+			$("#loader_progress").attr('value',HistoryItemsReturned);
+				
+			//console.time("array_conv");
+			var strings = data.split("dirty_hack\n");
+			// will hopefully bring the sexy back!
+			for (var str in strings) {
+				var json = JSON.parse(strings[str]);
+				//if (!json.aircraft) console.log(str);
+				PositionHistoryBuffer.push(json);
+			}
+			//console.timeEnd("array_conv");
+
 			if (HistoryItemsReturned == PositionHistorySize) {
 				end_load_history();
 			}
@@ -1235,7 +1312,7 @@ function refreshHighlighted() {
 }
 
 function refreshClock() {
-	$('#clock_div').text(new Date().toLocaleString());
+	$('#clock_div').text(new Date(now * 1000).toLocaleString());
 	var c = setTimeout(refreshClock, 500);
 }
 
